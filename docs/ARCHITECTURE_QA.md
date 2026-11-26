@@ -1,21 +1,21 @@
-# RM32 Technical Interview Guide — 25 RTL & Computer Architecture Questions
+# Technical Architecture Q&A — 5-Stage Pipelined RISC-V (RV32I) Processor
 
-This document prepares the engineer for hardware design and verification technical interviews, grounded directly in the implementation of the RM32 processor.
+This document covers 25 RTL and computer architecture questions grounded directly in the implementation of the single-cycle baseline (`rtl/`) and the evolved 5-stage pipelined RV32I processor (`pipelined/`).
 
 ---
 
-### Q1: What pipeline hazards exist in a classic 5-stage RISC processor, and which ones are present in RM32?
+### Q1: What pipeline hazards exist in a classic 5-stage RISC processor, and how are they handled here?
 **Answer:**
 There are three classes of hazards:
-1. **Structural Hazards:** Concurrent access to a shared resource. Avoided in RM32 by using Harvard architecture (split `imem` and `dmem`) and a dual-read/single-write register file.
+1. **Structural Hazards:** Concurrent access to a shared resource. Avoided by using Harvard architecture (split `imem` and `dmem`) and a dual-read/single-write register file.
 2. **Data Hazards (RAW, WAR, WAW):** 
-   - **RAW (Read-After-Write):** Solved in RM32 via EX/MEM and MEM/WB data forwarding to EX, and a 1-cycle stall for load-use hazards.
+   - **RAW (Read-After-Write):** Resolved via EX/MEM and MEM/WB data forwarding to EX, WB-to-ID internal register bypass, and a 1-cycle stall for load-use hazards.
    - **WAR & WAW:** Do not occur in an in-order, 5-stage pipeline because instructions read operands in ID and write back in WB in strict program order.
-3. **Control Hazards:** Caused by branches and jumps. Solved in RM32 by branch resolution in the EX stage, which flushes the two younger instructions in IF/ID and ID/EX on a taken branch (2-cycle penalty).
+3. **Control Hazards:** Caused by branches and jumps. Resolved by branch evaluation in the EX stage, which flushes the two younger instructions in IF/ID and ID/EX on a taken branch or jump (2-cycle penalty).
 
 ---
 
-### Q2: How does data forwarding work in RM32?
+### Q2: How does data forwarding work in the 5-stage pipeline?
 **Answer:**
 The forwarding unit in `pipelined/hazard_unit.sv` monitors the source register specifiers (`rs1_ex`, `rs2_ex`) against the destination registers of older in-flight instructions in EX/MEM (`rd_mem`) and MEM/WB (`rd_wb`). If a match occurs and the older instruction asserts `reg_write`, the ALU inputs are multiplexed from the pipeline register rather than the register file:
 - `forward_a = 2'b10`: forwarded from `alu_result_mem` (EX/MEM).
@@ -32,13 +32,13 @@ When back-to-back instructions write to the same register, the most recently exe
 
 ### Q4: What is the `x0` forwarding corner case?
 **Answer:**
-In RISC-V, writes to `x0` are discarded and `x0` must always read zero. However, an instruction like `addi x0, x1, 5` computes a non-zero value that sits in `alu_result_ex` and `alu_result_mem`. If the forwarding unit checks only `(rd_mem == rs1_ex)` without checking `(rd_mem != 5'd0)`, a subsequent instruction reading `x0` would receive the temporary non-zero forwarded result. RM32 explicitly requires `(rd_mem != 5'd0)` and `(rd_wb != 5'd0)` on all forwarding paths.
+In RISC-V, writes to `x0` are discarded and `x0` must always read zero. However, an instruction like `addi x0, x1, 5` computes a non-zero value that sits in `alu_result_ex` and `alu_result_mem`. If the forwarding unit checks only `(rd_mem == rs1_ex)` without checking `(rd_mem != 5'd0)`, a subsequent instruction reading `x0` would receive the temporary non-zero forwarded result. `hazard_unit` explicitly requires `(rd_mem != 5'd0)` and `(rd_wb != 5'd0)` on all forwarding paths.
 
 ---
 
 ### Q5: Why can't data forwarding eliminate the load-use hazard?
 **Answer:**
-A load instruction (`lw`) reads data from memory during the MEM stage. The read data is only available at the output of `dmem` at the end of the MEM clock cycle. An immediately following dependent instruction requires the operand at the beginning of the EX stage. Because data cannot travel backward in time, forwarding alone is physically impossible. RM32 stalls the pipeline for 1 clock cycle to allow the load to reach the MEM/WB boundary, where it is forwarded to EX.
+A load instruction (`lw`) reads data from memory during the MEM stage. The read data is only available at the output of `dmem` at the end of the MEM clock cycle. An immediately following dependent instruction requires the operand at the beginning of the EX stage. Because data cannot travel backward in time, forwarding alone is physically impossible. The hazard unit stalls the pipeline for 1 clock cycle to allow the load to reach the MEM/WB boundary, where it is forwarded to EX.
 
 ---
 
@@ -56,9 +56,9 @@ When asserted:
 
 ---
 
-### Q7: What is the branch penalty in RM32, and why?
+### Q7: What is the branch penalty in the 5-stage pipeline, and why?
 **Answer:**
-The branch penalty is **2 clock cycles**. RM32 resolves branches in the EX stage using the main ALU to evaluate the condition and calculate the branch target (`PC + immediate`). When a branch is taken, the two instructions fetched behind it (currently in IF/ID and ID/EX) are invalid and must be flushed by asserting `flush_if_id` and `flush_id_ex`.
+The branch penalty is **2 clock cycles**. The pipeline resolves branches in the EX stage using the main ALU to evaluate the condition and calculate the branch target (`PC + immediate`). When a branch is taken, the two instructions fetched behind it (currently in IF/ID and ID/EX) are invalid and must be flushed by asserting `flush_if_id` and `flush_id_ex`.
 
 ---
 
@@ -71,7 +71,7 @@ The branch penalty is **2 clock cycles**. RM32 resolves branches in the EX stage
 
 ### Q9: Why does `slt` require signed comparison, and how is it implemented?
 **Answer:**
-In RISC-V, `slt` (Set Less Than) treats register values as signed two's complement integers. Without signed comparison, `-5` (`0xFFFFFFFB`) would be interpreted as `4,294,967,291`, making `-5 < 5` false. RM32 implements signed comparison in `rtl/alu.sv` using:
+In RISC-V, `slt` (Set Less Than) treats register values as signed two's complement integers. Without signed comparison, `-5` (`0xFFFFFFFB`) would be interpreted as `4,294,967,291`, making `-5 < 5` false. Signed comparison is implemented in `rtl/alu.sv` using:
 ```systemverilog
 result = ($signed(a) < $signed(b)) ? 32'd1 : 32'd0;
 ```
@@ -84,7 +84,7 @@ In the RISC-V ISA, bit 31 is invariant across I, S, B, and J instruction formats
 
 ---
 
-### Q11: How does JAL work in RM32?
+### Q11: How does JAL work in the datapath?
 **Answer:**
 `jal rd, offset` performs two simultaneous operations:
 1. Computes the target address: `pc_target = pc + imm_j`, which updates the PC via `pc_src = 1`.
@@ -94,21 +94,21 @@ In the RISC-V ISA, bit 31 is invariant across I, S, B, and J instruction formats
 
 ### Q12: How does LUI work in the datapath?
 **Answer:**
-`lui rd, imm` (Load Upper Immediate) takes a 20-bit immediate, shifts it left by 12 bits (`{instr[31:12], 12'b0}`), and writes it to `rd`. In RM32, `result_src = 2'b11` selects the immediate directly at the writeback multiplexer, writing it directly into the register file without consuming ALU cycles.
+`lui rd, imm` (Load Upper Immediate) takes a 20-bit immediate, shifts it left by 12 bits (`{instr[31:12], 12'b0}`), and writes it to `rd`. `result_src = 2'b11` selects the immediate directly at the writeback multiplexer, writing it directly into the register file without consuming ALU cycles (and `fwd_value_mem` forwards the immediate directly in `pipe_datapath` for back-to-back EX dependencies).
 
 ---
 
 ### Q13: Why is single-cycle CPI strictly 1.0, while pipelined CPI is greater than 1.0?
 **Answer:**
-In a single-cycle core, each instruction completes all phases in one long clock cycle, yielding an architectural $\text{CPI} = 1.0$. In a pipelined core, throughput is ideally 1 instruction per cycle, but data hazards (load-use stalls) and control hazards (branch flushes) introduce bubble cycles, causing real CPI to exceed 1.0 (e.g., 1.56 on `sum10`). However, because pipelining drastically reduces the clock period, total execution time ($T = N \times \text{CPI} \times T_{\text{clk}}$) is significantly lower on the pipeline.
+In a single-cycle core, each instruction completes all phases in one long clock cycle, yielding an architectural $\text{CPI} = 1.0$. In a pipelined core, throughput is ideally 1 instruction per cycle, but data hazards (load-use stalls) and control hazards (branch flushes) introduce bubble cycles, causing real CPI to exceed 1.0 (e.g., 1.60 on `sum10`). However, because pipelining drastically reduces the clock period, total execution time ($T = N \times \text{CPI} \times T_{\text{clk}}$) is significantly lower on the pipeline.
 
 ---
 
 ### Q14: What were the measured CPI numbers on the test programs, and why?
 **Answer:**
 From real simulation logs:
-- `sum10`: Single-cycle CPI = **1.00**; Pipelined CPI = **1.56** (56 cycles for 36 instructions). 9 taken branches in the loop incur 18 flush cycles ($9 \times 2$).
-- `mem_loop`: Single-cycle CPI = **1.00**; Pipelined CPI = **1.45** (42 cycles for 29 instructions). Loop incurs 4 load-use stall cycles and 6 branch flush cycles ($3 \times 2$).
+- `sum10`: Single-cycle CPI = **1.00**; Pipelined CPI = **1.60** (56 cycles for 35 dynamic instructions). 9 taken branches in the loop incur 18 flush cycles ($9 \times 2$), plus 4 pipeline fill cycles.
+- `mem_loop`: Single-cycle CPI = **1.00**; Pipelined CPI = **1.45** (42 cycles for 29 dynamic instructions). Loop incurs 4 load-use stall cycles, 6 branch flush cycles ($3 \times 2$), plus 4 pipeline fill cycles.
 
 ---
 
@@ -135,7 +135,7 @@ By establishing a multi-layered verification strategy:
 
 ---
 
-### Q18: What SystemVerilog Assertions (SVAs) are embedded in RM32?
+### Q18: What SystemVerilog Assertions (SVAs) are embedded in the RTL?
 **Answer:**
 In `rtl/datapath.sv`:
 1. `assert (register.rf[0] == 32'd0)`: Invariant that `x0` is never corrupted.
@@ -144,7 +144,7 @@ In `rtl/datapath.sv`:
 
 ---
 
-### Q19: What happens on an unaligned memory access in RM32?
+### Q19: What happens on an unaligned memory access?
 **Answer:**
 In `rtl/dmem.sv`:
 - An unaligned write (`address[1:0] != 2'b00`) is suppressed and memory state is preserved.

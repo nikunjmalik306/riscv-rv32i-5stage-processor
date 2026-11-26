@@ -1,55 +1,104 @@
-# RM32 — Single-Cycle & 5-Stage Pipelined RV32I Processor Core
+# 5-Stage Pipelined RISC-V (RV32I) Processor
 
-[![CI](https://github.com/nikunjmalik306/rm32/actions/workflows/ci.yml/badge.svg)](https://github.com/nikunjmalik306/rm32/actions/workflows/ci.yml)
+[![CI](https://github.com/nikunjmalik306/riscv-rv32i-5stage-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/nikunjmalik306/riscv-rv32i-5stage-processor/actions/workflows/ci.yml)
 [![Language](https://img.shields.io/badge/Language-SystemVerilog-blue.svg)](https://en.wikipedia.org/wiki/SystemVerilog)
 [![ISA](https://img.shields.io/badge/ISA-RISC--V%20RV32I%20(Subset)-orange.svg)](https://riscv.org/)
-[![Lint](https://img.shields.io/badge/Verilator%20Lint-PASS%20(-Wall)-brightgreen.svg)]()
-[![Verification](https://img.shields.io/badge/Golden%20Model%20ISS-100%25%20Match-brightgreen.svg)]()
+[![Lint](https://img.shields.io/badge/Verilator%20Lint-PASS%20(-Wall)-brightgreen.svg)](#verification--measured-results)
+[![Verification](https://img.shields.io/badge/Golden%20Model%20ISS-600%2F600%20Match-brightgreen.svg)](#verification--measured-results)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
+A synthesizable **5-stage pipelined 32-bit RISC-V (`RV32I`) processor** in SystemVerilog, evolved from a verified single-cycle baseline (`rtl/`) into an `IF → ID → EX → MEM → WB` pipelined microarchitecture (`pipelined/`) with hardware data forwarding, load-use hazard stalling, branch flushing, and differential verification against a Python Instruction Set Simulator (ISS).
+
 ---
 
-## 1. Project Overview
+## Evolution: Single-Cycle Baseline → 5-Stage Pipelined Core
 
-**RM32** is a modular, verified 32-bit RISC-V processor core implemented in SystemVerilog conforming to the open-standard [RISC-V RV32I Unprivileged ISA](https://riscv.org/). The repository provides two complete, independent microarchitectures:
-1. **Single-Cycle Datapath ([`rtl/`](rtl/datapath.sv)):** Executes all supported instructions in 1 clock cycle ($\text{CPI} = 1.0$), featuring unified immediate sign-extension, ALU with zero flag, word-aligned memory interfaces, and embedded SystemVerilog Assertions (SVA).
-2. **5-Stage Pipelined Core ([`pipelined/`](pipelined/README.md)):** Implements a classic IF/ID/EX/MEM/WB pipeline ([`pipe_datapath.sv`](pipelined/pipe_datapath.sv)) equipped with full data forwarding ([`hazard_unit.sv`](pipelined/hazard_unit.sv): EX/MEM and MEM/WB to EX with `LUI`/`JAL` bypass muxing), WB-to-ID internal forwarding, 1-cycle load-use hazard stalling with bubble injection, branch resolution in the EX stage with 2-cycle speculative flush, and hardware performance counters (`cycles_count`, `retired_inst_count`). See the [5-Stage Pipelined Core Documentation](pipelined/README.md) for a module-by-module guide.
+Rather than starting straight from a complex pipeline, this project was structured as an explicit microarchitectural progression:
 
-The design is verified end-to-end using an open-source EDA toolchain (Icarus Verilog, Verilator, and Yosys), featuring self-checking unit testbenches, directed hazard tests, real assembly programs, and an independent Python Instruction Set Simulator (ISS) golden reference model with automated trace diff.
+| Design Dimension | Single-Cycle Baseline ([`rtl/`](rtl/datapath.sv)) | Evolved 5-Stage Pipeline ([`pipelined/`](pipelined/pipe_datapath.sv)) |
+| :--- | :--- | :--- |
+| **Execution Model** | 1 instruction completes in 1 long combinational cycle (`CPI = 1.00`) | 5 synchronous stages (`IF`, `ID`, `EX`, `MEM`, `WB`) bounded by stage registers |
+| **Critical Path** | `PC → IMEM → RegFile → ALU → DMEM → Result Mux → RegFile` | Partitioned into single-stage paths (e.g., EX forwarding + ALU or MEM lookup) |
+| **Shared Building Blocks** | `alu`, `controller`, `reg_file`, `signextn`, `imem`, `dmem` | Reuses the exact verified submodules from `rtl/` inside pipeline stages |
+| **Data Hazards (RAW)** | None (sequential state updates once per cycle) | `EX/MEM → EX`, `MEM/WB → EX`, `WB → ID` bypass, `x0` suppression, & `LUI`/`JAL` EX/MEM mux (`fwd_value_mem`) |
+| **Load-Use Dependency** | Completed within the same clock cycle | 1-cycle stall (`stall_pc`, `stall_if_id`) + EX bubble insertion (`flush_id_ex`) |
+| **Control Hazards** | Resolved combinationally before next clock edge | Branches & `jal` resolve in EX; 2-cycle flush (`flush_if_id`, `flush_id_ex`) |
+| **Measured Benchmark CPI** | `1.00` (`sum10`: 35 cycles; `mem_loop`: 29 cycles) | `1.60` (`sum10`: 56 cycles / 35 insts); `1.45` (`mem_loop`: 42 cycles / 29 insts) |
+| **Differential ISS Fuzzing** | 600 / 600 constrained-random programs (`0` mismatches) | 600 / 600 constrained-random programs (`0` mismatches) |
 
 > [!NOTE]
-> **Honesty & Verification Scope**:
-> Every number, test result, and performance metric reported in this documentation is taken directly from real simulation logs and synthesis reports generated in this repository. All verification was conducted via behavioral simulation and generic logic synthesis. The design has **not** been placed and routed on physical FPGA or ASIC silicon.
+> All verification was performed using behavioral simulation (Icarus Verilog + Verilator `-Wall` lint + Python ISS) and generic Yosys synthesis; the processor has not been placed and routed on physical FPGA or ASIC silicon.
 
 ---
 
-## 2. Supported RV32I Instruction Subset
+## Evolved 5-Stage Pipelined Microarchitecture (`pipelined/`)
 
-The core implements 15 foundational RV32I integer instructions spanning all major formats:
+The primary processor implementation in [`pipelined/`](pipelined/README.md) splits instruction execution across five pipeline stages using dedicated synchronous pipeline registers ([`pipe_if_id.sv`](pipelined/pipe_if_id.sv), [`pipe_id_ex.sv`](pipelined/pipe_id_ex.sv), [`pipe_ex_mem.sv`](pipelined/pipe_ex_mem.sv), [`pipe_mem_wb.sv`](pipelined/pipe_mem_wb.sv)) coordinated by [`hazard_unit.sv`](pipelined/hazard_unit.sv).
 
-| Instruction | Type | Syntax | Opcode | Funct3 | Funct7 | Description |
-|:---|:---:|:---|:---:|:---:|:---:|:---|
-| **`lw`** | I | `lw rd, imm(rs1)` | `0000011` | `010` | — | Load 32-bit word from memory |
-| **`sw`** | S | `sw rs2, imm(rs1)` | `0100011` | `010` | — | Store 32-bit word to memory |
-| **`add`** | R | `add rd, rs1, rs2` | `0110011` | `000` | `0000000` | Arithmetic addition |
-| **`sub`** | R | `sub rd, rs1, rs2` | `0110011` | `000` | `0100000` | Arithmetic subtraction |
-| **`and`** | R | `and rd, rs1, rs2` | `0110011` | `111` | `0000000` | Bitwise logical AND |
-| **`or`** | R | `or rd, rs1, rs2` | `0110011` | `110` | `0000000` | Bitwise logical OR |
-| **`slt`** | R | `slt rd, rs1, rs2` | `0110011` | `010` | `0000000` | Set Less Than (signed comparison) |
-| **`addi`** | I | `addi rd, rs1, imm` | `0010011` | `000` | — | Add immediate (sign-extended) |
-| **`andi`** | I | `andi rd, rs1, imm` | `0010011` | `111` | — | Bitwise AND immediate |
-| **`ori`** | I | `ori rd, rs1, imm` | `0010011` | `110` | — | Bitwise OR immediate |
-| **`slti`** | I | `slti rd, rs1, imm` | `0010011` | `010` | — | Set Less Than immediate (signed) |
-| **`beq`** | B | `beq rs1, rs2, label` | `1100011` | `000` | — | Branch if Equal (`rs1 == rs2`) |
-| **`bne`** | B | `bne rs1, rs2, label` | `1100011` | `001` | — | Branch if Not Equal (`rs1 != rs2`) |
-| **`jal`** | J | `jal rd, label` | `1101111` | — | — | Jump and Link (target = `PC + imm`, `rd = PC + 4`) |
-| **`lui`** | U | `lui rd, imm` | `0110111` | — | — | Load Upper Immediate (`rd = imm << 12`) |
+```mermaid
+flowchart LR
+    subgraph IF_STAGE["IF Stage"]
+        PC_REG["PC"] --> IMEM_P["IMEM"]
+        PC_REG --> PC4_ADD["+4"]
+    end
 
----
+    IF_STAGE -->|"pipe_if_id"| ID_STAGE
 
-## 3. Microarchitectural Diagrams
+    subgraph ID_STAGE["ID Stage"]
+        RF_P["RegFile (WB->ID bypass)"]
+        CTRL_P["Controller"]
+        SEXT_P["SignExt"]
+    end
 
-### Single-Cycle Datapath (`rtl/datapath.sv`)
+    ID_STAGE -->|"pipe_id_ex"| EX_STAGE
+
+    subgraph EX_STAGE["EX Stage"]
+        FWD_A["Forward Mux A"] --> ALU_P["ALU"]
+        FWD_B["Forward Mux B"] --> ALU_MUX["ALUSrc Mux"]
+        ALU_MUX --> ALU_P
+        BR_LOGIC["Branch / JAL Target & Eval"]
+    end
+
+    EX_STAGE -->|"pipe_ex_mem"| MEM_STAGE
+
+    subgraph MEM_STAGE["MEM Stage"]
+        DMEM_P["DMEM"]
+        FWD_VAL["fwd_value_mem (ALU/PC+4/LUI)"]
+    end
+
+    MEM_STAGE -->|"pipe_mem_wb"| WB_STAGE
+
+    subgraph WB_STAGE["WB Stage"]
+        WB_MUX_P["Writeback Mux (4:1)"]
+    end
+
+    WB_STAGE -.->|"result_wb (Writeback)"| RF_P
+
+    subgraph HAZARD["Hazard Unit (pipelined/hazard_unit.sv)"]
+        HZ["Hazard & Forwarding Unit"]
+    end
+
+    EX_STAGE -.->|"rs1_ex, rs2_ex, rd_ex"| HZ
+    MEM_STAGE -.->|"rd_mem, reg_write_mem"| HZ
+    WB_STAGE -.->|"rd_wb, reg_write_wb"| HZ
+    HZ -.->|"forward_a, forward_b"| EX_STAGE
+    HZ -.->|"stall_pc, stall_if_id"| IF_STAGE
+    HZ -.->|"flush_id_ex (bubble)"| EX_STAGE
+    BR_LOGIC -.->|"pc_src_ex (2-cycle flush)"| PC_REG
+    BR_LOGIC -.->|"flush_if_id, flush_id_ex"| HZ
+```
+
+### Pipeline Hazard & Bypass Mechanisms
+- **Priority Forwarding (`EX/MEM` over `MEM/WB`):** [`hazard_unit.sv`](pipelined/hazard_unit.sv) forwards the newest writer (`2'b10` from `EX/MEM`, `2'b01` from `MEM/WB`), while suppressing forwarding when `rd == x0`.
+- **`LUI` / `JAL` EX/MEM Value Multiplexing:** In [`pipe_datapath.sv`](pipelined/pipe_datapath.sv), `fwd_value_mem` selects `immediate_mem_fwd` for `lui` and `pc_plus_4_mem_fwd` for `jal` instead of raw `alu_result_mem`, preventing back-to-back RAW corruption on non-ALU results.
+- **WB-to-ID Internal Bypass:** Allows an instruction in `ID` to read a register written in `WB` on the same clock edge without stalling.
+- **Load-Use Stall & Control Flush:** A load (`result_src_ex == 2'b01`) matching `rs1_id` or `rs2_id` stalls `PC` and `IF/ID` for 1 cycle and injects a bubble into `ID/EX`. Taken branches (`beq`, `bne`) and `jal` resolve in `EX`, flushing `IF/ID` and `ID/EX` (2-cycle penalty).
+- **Hardware Performance Counters:** `cycles_count` and `retired_inst_count` measure cycle-accurate CPI directly in hardware.
+
+See [`pipelined/README.md`](pipelined/README.md) for a module-by-module guide.
+
+<details>
+<summary><b>Single-Cycle Baseline Reference Architecture (rtl/datapath.sv)</b></summary>
 
 ```mermaid
 flowchart TD
@@ -92,310 +141,111 @@ flowchart TD
     end
 ```
 
----
-
-### 5-Stage Pipelined Architecture with Hazard Unit (`pipelined/`)
-
-```mermaid
-flowchart LR
-    subgraph IF_STAGE["IF Stage"]
-        PC_REG["PC"] --> IMEM_P["IMEM"]
-        PC_REG --> PC4_ADD["+4"]
-    end
-
-    IF_STAGE -->|"pipe_if_id"| ID_STAGE
-
-    subgraph ID_STAGE["ID Stage"]
-        RF_P["RegFile"]
-        CTRL_P["Controller"]
-        SEXT_P["SignExt"]
-    end
-
-    ID_STAGE -->|"pipe_id_ex"| EX_STAGE
-
-    subgraph EX_STAGE["EX Stage"]
-        FWD_A["Forward Mux A"] --> ALU_P["ALU"]
-        FWD_B["Forward Mux B"] --> ALU_MUX["ALUSrc Mux"]
-        ALU_MUX --> ALU_P
-        BR_LOGIC["Branch / Jump Eval"]
-    end
-
-    EX_STAGE -->|"pipe_ex_mem"| MEM_STAGE
-
-    subgraph MEM_STAGE["MEM Stage"]
-        DMEM_P["DMEM"]
-    end
-
-    MEM_STAGE -->|"pipe_mem_wb"| WB_STAGE
-
-    subgraph WB_STAGE["WB Stage"]
-        WB_MUX_P["Writeback Mux"]
-    end
-
-    WB_STAGE -.->|"result_wb (Writeback)"| RF_P
-
-    subgraph HAZARD["Hazard Unit (pipelined/hazard_unit.sv)"]
-        HZ["Hazard & Forwarding Unit"]
-    end
-
-    EX_STAGE -.->|"rd_mem, alu_result"| HZ
-    MEM_STAGE -.->|"rd_mem, reg_write"| HZ
-    WB_STAGE -.->|"rd_wb, reg_write"| HZ
-    HZ -.->|"forward_a, forward_b"| EX_STAGE
-    HZ -.->|"stall_pc, stall_if_id"| IF_STAGE
-    HZ -.->|"flush_id_ex (bubble)"| EX_STAGE
-    BR_LOGIC -.->|"pc_src_ex (taken)"| PC_REG
-    BR_LOGIC -.->|"flush_if_id, flush_id_ex"| HZ
-```
+</details>
 
 ---
 
-## 4. Control Unit Truth Tables
+## Supported RV32I Instruction Subset (15 Instructions)
+
+| Class | Instructions | Notes |
+| :--- | :--- | :--- |
+| **Arithmetic / Logic (R-type)** | `add`, `sub`, `and`, `or`, `slt` | Signed comparison (`$signed`) for `slt`; zero flag output |
+| **Immediate ALU (I-type)** | `addi`, `andi`, `ori`, `slti` | 12-bit sign-extended immediates |
+| **Upper Immediate (U-type)** | `lui` | Writes `{imm[31:12], 12'b0}` via writeback mux & EX/MEM bypass |
+| **Memory Access (Word-Aligned)** | `lw`, `sw` | `address[1:0] == 2'b00` enforced; unaligned/OOB writes ignored |
+| **Control Transfer** | `beq`, `bne`, `jal` | Evaluated in EX stage; `jal` writes `pc + 4` to `rd` |
+
+<details>
+<summary><b>Controller Truth Tables, Immediate Formats & Memory Rules</b></summary>
 
 ### Main Decoder
-
-| Opcode | Instruction Class | `reg_write` | `imm_src[2:0]` | `alu_src` | `mem_write` | `result_src[1:0]` | `branch` | `jump` | `alu_op[1:0]` |
+| Opcode | Class | `reg_write` | `imm_src[2:0]` | `alu_src` | `mem_write` | `result_src[1:0]` | `branch` | `jump` | `alu_op[1:0]` |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `0000011` | `lw` | `1` | `000` (I) | `1` (imm) | `0` | `01` (dmem) | `0` | `0` | `00` (ADD) |
-| `0100011` | `sw` | `0` | `001` (S) | `1` (imm) | `1` | `00` (X) | `0` | `0` | `00` (ADD) |
-| `0110011` | R-type | `1` | `000` (X) | `0` (rs2) | `0` | `00` (alu) | `0` | `0` | `10` (R-type) |
-| `0010011` | I-type ALU | `1` | `000` (I) | `1` (imm) | `0` | `00` (alu) | `0` | `0` | `10` (I-type) |
-| `1100011` | Branch (`beq`/`bne`) | `0` | `010` (B) | `0` (rs2) | `0` | `00` (X) | `1` | `0` | `01` (SUB) |
-| `1101111` | `jal` | `1` | `011` (J) | `0` (X) | `0` | `10` (PC+4)| `0` | `1` | `00` (ADD) |
-| `0110111` | `lui` | `1` | `100` (U) | `1` (X) | `0` | `11` (imm) | `0` | `0` | `00` (ADD) |
+| `0000011` | `lw` | `1` | `000` (I) | `1` | `0` | `01` (dmem) | `0` | `0` | `00` |
+| `0100011` | `sw` | `0` | `001` (S) | `1` | `1` | `00` (X) | `0` | `0` | `00` |
+| `0110011` | R-type | `1` | `000` (X) | `0` | `0` | `00` (alu) | `0` | `0` | `10` |
+| `0010011` | I-type ALU | `1` | `000` (I) | `1` | `0` | `00` (alu) | `0` | `0` | `10` |
+| `1100011` | `beq`/`bne` | `0` | `010` (B) | `0` | `0` | `00` (X) | `1` | `0` | `01` |
+| `1101111` | `jal` | `1` | `011` (J) | `0` | `0` | `10` (PC+4) | `0` | `1` | `00` |
+| `0110111` | `lui` | `1` | `100` (U) | `1` | `0` | `11` (imm) | `0` | `0` | `00` |
 
-### ALU Decoder
+### Immediate Formats & Memory Addressing
+- **Immediates (`rtl/signextn.sv`):** `I = [31:20]`, `S = {[31:25],[11:7]}`, `B = {[31],[7],[30:25],[11:8],1'b0}`, `J = {[31],[19:12],[20],[30:21],1'b0}`, `U = {[31:12],12'b0}`.
+- **Memory Bounds (`128` words default):** Unaligned loads return `32'h0`; unaligned/OOB stores are ignored; OOB instruction fetches return `0x00000013` (`NOP`).
 
-| `alu_op[1:0]` | `funct3[2:0]` | `op[5]` | `funct7[5]` | `alu_ctrl[2:0]` | ALU Operation | Instructions |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---|
-| `00` | `---` | `-` | `-` | `000` | Addition (`a + b`) | `lw`, `sw`, `jal`, `lui` |
-| `01` | `---` | `-` | `-` | `001` | Subtraction (`a - b`) | `beq`, `bne` |
-| `10` | `000` | `1` | `1` | `001` | Subtraction (`a - b`) | `sub` |
-| `10` | `000` | `0` or `x` | `0` | `000` | Addition (`a + b`) | `add`, `addi` |
-| `10` | `010` | `-` | `-` | `101` | Signed Compare (`$signed(a) < $signed(b)`) | `slt`, `slti` |
-| `10` | `110` | `-` | `-` | `011` | Bitwise OR (`a \| b`) | `or`, `ori` |
-| `10` | `111` | `-` | `-` | `010` | Bitwise AND (`a & b`) | `and`, `andi` |
+</details>
 
 ---
 
-## 5. Immediate Encoding Formats
+## Verification & Measured Results
 
-All immediate fields are sign-extended to 32 bits. In accordance with the RISC-V specification, bit 31 always drives the sign-extension replication bit:
+All suites execute via `make lint && make test`:
 
-```
-I-type: [31:20]                                                 --> imm[11:0]
-S-type: [31:25] | [11:7]                                        --> imm[11:0]
-B-type: [31] | [7] | [30:25] | [11:8] | 1'b0                    --> imm[12:0]
-J-type: [31] | [19:12] | [20] | [30:21] | 1'b0                  --> imm[20:0]
-U-type: [31:12] | 12'b0                                         --> imm[31:0]
-```
-
----
-
-## 6. Memory Map & Addressing Rules
-
-- **Word-Aligned Addressing:** All memory accesses (`imem` and `dmem`) enforce 4-byte alignment: `address[1:0] == 2'b00`.
-- **Unaligned Access Behavior:**
-  - Unaligned stores (`address[1:0] != 2'b00`) are ignored; memory contents are untouched.
-  - Unaligned loads return `32'h00000000`.
-- **Out-of-Bounds Behavior:**
-  - Memory depth is parameterized (default: 128 words / 512 bytes).
-  - Out-of-bounds instruction fetch returns `0x00000013` (NOP: `addi x0, x0, 0`), preventing simulation halts.
-  - Out-of-bounds data writes are ignored; out-of-bounds data reads return `32'h00000000`.
+| Suite | Target / Tool | Scope & Checks | Result |
+| :--- | :--- | :--- | :--- |
+| **Verilator Lint** | `datapath` & `pipe_datapath` (`-Wall`) | Static type, width, and latch checks across all `.sv` sources | **0 warnings, 0 errors** |
+| **Unit Suites (`tests/unit/`)** | `alu`, `reg_file`, `signextn`, `controller`, `dmem` | 46 self-checking unit assertions | **46 / 46 PASS** |
+| **5-Stage Pipeline Hazards** | [`tb_pipeline_hazards.sv`](tests/pipelined/tb_pipeline_hazards.sv) | EX/MEM & MEM/WB forwarding, `x0` suppression, load-use stall, branch flush, `LUI` bypass | **10 / 10 PASS** (35 cyc, 28 retired) |
+| **Program Benchmarks** | [`tb_pipeline_programs.sv`](tests/pipelined/tb_pipeline_programs.sv) & [`tb_programs.sv`](tests/integration/tb_programs.sv) | `sum10.hex` ($\sum_{1}^{10}=55$) and `mem_loop.hex` ($\sum=100$) | **PASS** (Pipeline CPI: `1.60`, `1.45`; Single-cycle CPI: `1.00`) |
+| **ISS Trace Diff** | [`run_trace_diff.py`](tools/run_trace_diff.py) vs [`rv32i_iss.py`](tools/rv32i_iss.py) | Cycle-by-cycle architectural trace diff on `sum10` & `mem_loop` | **0 mismatches** |
+| **Random Differential Fuzz** | [`random_diff_test.py`](tools/random_diff_test.py) | **600** constrained-random programs across **both** cores vs Python ISS | **600 / 600 MATCH** (`0` mismatches) |
+| **Generic Synthesis** | Yosys (`make synth`) | `synth -top datapath -flatten` (**94** cells) & `synth -top pipe_datapath -flatten` (**202** cells) | **Clean elaboration** (0 latches) |
 
 ---
 
-## 7. Real Verification & Test Results
+## Repository Structure
 
-The full test suite executes automatically via `make test`. All results below are reproduced directly from the real simulation logs:
-
-### Unit Test Suite (`tests/unit/`)
-
-| Testbench | Module Under Test | Checks Run | Passes | Fails | Scope & Assertions Verified |
-|:---|:---|:---:|:---:|:---:|:---|
-| [`tb_alu.sv`](tests/unit/tb_alu.sv) | `alu` | 10 | **10** | 0 | ADD, SUB, AND, OR, SLT signed compare (-5 < 5), zero flag |
-| [`tb_reg_file.sv`](tests/unit/tb_reg_file.sv) | `reg_file` | 5 | **5** | 0 | Dual read, synchronous write, x0 write suppression, reset |
-| [`tb_signextn.sv`](tests/unit/tb_signextn.sv) | `signextn` | 8 | **8** | 0 | I, S, B, J, U formats; positive and negative sign extensions |
-| [`tb_controller.sv`](tests/unit/tb_controller.sv) | `controller` | 17 | **17** | 0 | All 15 instructions decoded; BEQ/BNE taken & not-taken conditions |
-| [`tb_dmem.sv`](tests/unit/tb_dmem.sv) | `dmem` | 6 | **6** | 0 | Synchronous write, combinational read, unaligned rejection, bounds |
-| **Total Unit Checks** | | **46** | **46** | **0** | **100% PASS** |
-
-### Integration & Real Program Suite
-
-| Testbench | Target Architecture | Program / Hex | Checks | Result | Execution Details |
-|:---|:---|:---|:---:|:---:|:---|
-| [`tb_instruction_classes.sv`](tests/integration/tb_instruction_classes.sv) | Single-Cycle | `edge_cases.hex` | 15 | **PASS** | x0 invariant, SLT/SLTI signed logic, LUI, JAL link/jump, BEQ/BNE |
-| [`tb_programs.sv`](tests/integration/tb_programs.sv) | Single-Cycle | `sum10.hex` | 3 | **PASS** | Loop $\sum_{i=1}^{10} i = 55$; writes to DMem[0], reloads to x3 |
-| [`tb_programs.sv`](tests/integration/tb_programs.sv) | Single-Cycle | `mem_loop.hex` | 3 | **PASS** | Array store [10,20,30,40], loop sum=100; reloads to x7 |
-| [`tb_pipeline_hazards.sv`](tests/pipelined/tb_pipeline_hazards.sv) | 5-Stage Pipeline | `hazard_tests.hex` | 10 | **PASS** | RAW forwarding, x0 suppression, load-use stall, branch flush, LUI EX/MEM bypass |
-| [`tb_pipeline_programs.sv`](tests/pipelined/tb_pipeline_programs.sv) | 5-Stage Pipeline | `sum10.hex` | 3 | **PASS** | Final sum x2=55, dmem[0]=55, x3=55; 56 cycles, 35 dynamic insts (CPI 1.60) |
-| [`tb_pipeline_programs.sv`](tests/pipelined/tb_pipeline_programs.sv) | 5-Stage Pipeline | `mem_loop.hex` | 3 | **PASS** | Final sum x5=100, dmem[4]=100, x7=100; 42 cycles, 29 dynamic insts (CPI 1.45) |
-| [`single_cycle_TB.sv`](TestBench/single_cycle_TB.sv) | Single-Cycle | Legacy Test | 2 | **PASS** | Original Vivado testbench updated for active-high reset |
-
-### Golden Model Trace-Diff & Random Differential Verification
-
-| Test Type | Golden Reference | Target RTL Cores Verified | Programs / Instructions Evaluated | Result | Verification Status |
-|:---|:---|:---|:---:|:---:|:---|
-| **Random Differential Testing** (`tools/random_diff_test.py`) | Python ISS (`tools/rv32i_iss.py`) | Single-Cycle Core & 5-Stage Pipelined Core | **600 constrained-random programs** (RAW hazards, load-use stalls, branches, jumps, LUI) | **0 mismatches** (600/600 match) | **100% BIT-FOR-BIT MATCH** |
-| **Directed Program Trace Diff** (`sum10.hex`) | Python ISS (`tools/rv32i_iss.py`) | Single-Cycle RTL Core | 35 active dynamic instructions + post-run drain cycles | **0 mismatches** | **100% EXACT MATCH** |
-| **Directed Program Trace Diff** (`mem_loop.hex`) | Python ISS (`tools/rv32i_iss.py`) | Single-Cycle RTL Core | 29 active dynamic instructions + post-run drain cycles | **0 mismatches** | **100% EXACT MATCH** |
-
----
-
-## 8. Measured Cycles Per Instruction (CPI)
-
-Cycles and dynamic instructions measured accurately via cycle-accurate simulation:
-
-| Test Program | Dynamic Instructions | Single-Cycle Execution Cycles | Single-Cycle CPI | 5-Stage Pipelined Execution Cycles | 5-Stage Pipelined Real CPI | Stall / Flush Overhead in Pipeline |
-|:---|:---:|:---:|:---:|:---:|:---:|:---|
-| **`sum10`** ($\sum_{i=1}^{10} i$) | 35 | 35 | **1.00** | 56 | **1.60** ($56/35$) | 18 branch flush cycles ($9 \times 2$) + 4 pipeline fill cycles |
-| **`mem_loop`** (Array Sum) | 29 | 29 | **1.00** | 42 | **1.45** ($42/29$) | 4 load-use stalls + 6 branch flushes ($3 \times 2$) + 4 pipeline fill cycles |
-
----
-
-## 9. Generic Synthesis Verification (Yosys)
-
-> [!NOTE]
-> Both the single-cycle and 5-stage pipelined cores cleanly elaborate and pass generic logic synthesis in Yosys (`make synth`). Gate/cell counts vary depending on the Yosys version and target library mapping (e.g. Yosys 0.70+ reports ~94 cells for single-cycle and ~202 cells for the pipelined core, whereas Yosys 0.33 reports ~109 and ~235 cells). Because generic synthesis models memories as arrays rather than physical SRAM/BRAM macros, these figures represent generic gate-level optimization rather than physical silicon signoff numbers.
-
-- **Single-Cycle Datapath:** Clean generic synthesis via `synth -top datapath -flatten`.
-- **5-Stage Pipelined Datapath:** Clean generic synthesis via `synth -top pipe_datapath -flatten`.
-- **Core Submodules:** `alu` (610 generic cells), `controller` (44 cells), `hazard_unit` (88 cells), and `reg_file` (4,585 cells with 992 flip-flops) synthesize cleanly without warnings.
-
----
-
-## 10. Repository Layout
-
-```
-rm32/
-├── Makefile                       # Top-level build, lint, test, wave, and synth automation
-├── README.md                      # Complete architectural and verification documentation
-├── LICENSE                        # MIT License
-├── CHANGELOG.md                   # Full chronological changelog of all upgrades
-├── docs/
-│   ├── DESIGN_DECISIONS.md        # Architectural rationale and trade-offs
-│   └── INTERVIEW_NOTES.md         # 25 in-depth technical interview Q&As grounded in code
-├── rtl/                           # Synthesizable SystemVerilog single-cycle core
-│   ├── alu.sv                     # 32-bit ALU (ADD, SUB, AND, OR, SLT, Zero flag)
-│   ├── controller.sv              # Main Decoder & ALU Decoder (15 RV32I instructions)
-│   ├── datapath.sv                # Top-level single-cycle processor with SV assertions
-│   ├── dmem.sv                    # Parameterized synchronous write / combinational read memory
-│   ├── imem.sv                    # Parameterized combinational instruction memory
-│   ├── reg_file.sv                # 32 x 32-bit register file (x0 hardwired to 0)
-│   ├── signextn.sv                # Immediate sign-extension (I, S, B, J, U formats)
-│   ├── dmem.hex                   # Initial data memory contents
-│   └── imemory.hex                # Initial test program machine code
-├── pipelined/                     # 5-stage pipelined processor core
-│   ├── pipe_datapath.sv           # Pipelined processor top-level
-│   ├── hazard_unit.sv             # Data forwarding, load-use stall, branch flush logic
-│   ├── pipe_if_id.sv              # IF/ID pipeline register with stall & flush
-│   ├── pipe_id_ex.sv              # ID/EX pipeline register with flush
-│   ├── pipe_ex_mem.sv             # EX/MEM pipeline register
-│   └── pipe_mem_wb.sv             # MEM/WB pipeline register
+```text
+riscv-rv32i-5stage-processor/
+├── pipelined/                     # Evolved 5-stage pipelined processor core (primary)
+│   ├── README.md                  # Module breakdown, hazard rules & pipeline verification
+│   ├── pipe_datapath.sv           # Top-level 5-stage pipeline + WB->ID & LUI/JAL bypasses
+│   ├── hazard_unit.sv             # Forwarding, load-use stall & branch flush controller
+│   └── pipe_{if_id,id_ex,ex_mem,mem_wb}.sv
+├── rtl/                           # Single-cycle baseline & shared verified submodules
+│   ├── datapath.sv                # Single-cycle baseline top-level with SVA invariants
+│   ├── alu.sv, controller.sv, signextn.sv, reg_file.sv, imem.sv, dmem.sv
+│   └── imemory.hex, dmem.hex
 ├── tests/
-│   ├── unit/                      # Standalone self-checking unit testbenches
-│   │   ├── tb_alu.sv
-│   │   ├── tb_reg_file.sv
-│   │   ├── tb_signextn.sv
-│   │   ├── tb_controller.sv
-│   │   └── tb_dmem.sv
-│   ├── integration/               # Single-cycle system testbenches
-│   │   ├── tb_instruction_classes.sv
-│   │   └── tb_programs.sv
-│   ├── pipelined/                 # Pipelined system testbenches
-│   │   ├── tb_pipeline_hazards.sv
-│   │   └── tb_pipeline_programs.sv
-│   ├── random/                    # Random differential testbenches
-│   │   ├── tb_random_pipe.sv
-│   │   └── tb_random_single.sv
-│   └── asm/                       # Assembly test programs and assembled .hex files
-│       ├── sum10.s / sum10.hex
-│       ├── mem_loop.s / mem_loop.hex
-│       ├── edge_cases.s / edge_cases.hex
-│       └── hazard_tests.s / hazard_tests.hex
-├── tools/
-│   ├── assembler.py               # Custom Python RV32I subset assembler
-│   ├── rv32i_iss.py               # Python Golden Reference Instruction Set Simulator
-│   ├── run_trace_diff.py          # Automated RTL vs Golden ISS trace comparison tool
-│   └── random_diff_test.py        # Constrained-random differential verification suite
-└── .github/workflows/
-    └── ci.yml                     # GitHub Actions CI (lint, full test suite, synthesis)
-```
-
-### Direct Source & Verification Links
-
-- **5-Stage Pipelined Core ([`pipelined/README.md`](pipelined/README.md)):** [`pipe_datapath.sv`](pipelined/pipe_datapath.sv) · [`hazard_unit.sv`](pipelined/hazard_unit.sv) · [`pipe_if_id.sv`](pipelined/pipe_if_id.sv) · [`pipe_id_ex.sv`](pipelined/pipe_id_ex.sv) · [`pipe_ex_mem.sv`](pipelined/pipe_ex_mem.sv) · [`pipe_mem_wb.sv`](pipelined/pipe_mem_wb.sv)
-- **Single-Cycle Core (`rtl/`):** [`datapath.sv`](rtl/datapath.sv) · [`controller.sv`](rtl/controller.sv) · [`alu.sv`](rtl/alu.sv) · [`reg_file.sv`](rtl/reg_file.sv) · [`signextn.sv`](rtl/signextn.sv) · [`imem.sv`](rtl/imem.sv) · [`dmem.sv`](rtl/dmem.sv)
-- **Pipelined & Differential Tests:** [`tb_pipeline_hazards.sv`](tests/pipelined/tb_pipeline_hazards.sv) · [`tb_pipeline_programs.sv`](tests/pipelined/tb_pipeline_programs.sv) · [`tb_random_pipe.sv`](tests/random/tb_random_pipe.sv) · [`tb_random_single.sv`](tests/random/tb_random_single.sv) · [`hazard_tests.s`](tests/asm/hazard_tests.s)
-- **Verification Tooling (`tools/`):** [`assembler.py`](tools/assembler.py) · [`rv32i_iss.py`](tools/rv32i_iss.py) · [`run_trace_diff.py`](tools/run_trace_diff.py) · [`random_diff_test.py`](tools/random_diff_test.py)
-- **Architecture & Interview Docs (`docs/`):** [`DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) · [`INTERVIEW_NOTES.md`](docs/INTERVIEW_NOTES.md) · [`CHANGELOG.md`](CHANGELOG.md)
-
----
-
-## 11. How to Build, Simulate, and Test
-
-### Prerequisites
-- **Icarus Verilog (`iverilog`)** & **`vvp`** (v11+ recommended)
-- **Verilator** (v5.0+ recommended)
-- **Yosys** (v0.30+ for optional synthesis checks)
-- **Python 3** (v3.8+)
-
-On macOS (via Homebrew):
-```bash
-brew install icarus-verilog verilator yosys python3
-```
-
-On Ubuntu / Debian:
-```bash
-sudo apt-get update && sudo apt-get install -y iverilog verilator yosys python3
-```
-
-### Running the Full Test Suite
-```bash
-make test
-```
-Executes all 5 unit testbenches, single-cycle integration tests, pipeline hazard tests, pipeline real program benchmarks, and Python golden ISS trace-diff checks.
-
-### Running Verilator Lint
-```bash
-make lint
-```
-Lints both single-cycle and pipelined cores with `--lint-only -Wall`.
-
-### Running Generic Synthesis Check
-```bash
-make synth
-```
-Runs generic logic synthesis in Yosys and reports cell statistics and topological path depths.
-
-### Generating Waveforms (VCD)
-```bash
-make wave
+│   ├── unit/                      # Standalone module unit testbenches (46 checks)
+│   ├── integration/               # Single-cycle baseline integration tests
+│   ├── pipelined/                 # 5-stage pipeline hazard & benchmark testbenches
+│   ├── random/                    # Random differential test harnesses
+│   └── asm/                       # Assembly sources & padded .hex binaries
+├── tools/                         # Python RV32I assembler, Golden ISS & differential runner
+├── docs/
+│   ├── DESIGN_DECISIONS.md        # Architectural rationale & pipeline evolution tradeoffs
+│   └── ARCHITECTURE_QA.md         # 25 grounded RTL & microarchitecture Q&As
+├── synth/                         # Yosys synthesis script
+├── Makefile                       # make all, test, lint, synth, wave, clean
+├── CHANGELOG.md                   # Single-cycle -> 5-stage evolution history
+└── .github/workflows/ci.yml       # Automated GitHub Actions CI (lint, tests, synthesis)
 ```
 
 ---
 
-## 12. Known Limitations & Non-Implemented Features
+## Quick Start
 
-To maintain transparency and architectural integrity, the following features are intentionally **not** implemented in this student/portfolio subset:
-1. **No CSRs or Privilege Levels:** No Control and Status Registers (`mstatus`, `mepc`, etc.); runs entirely in unprivileged bare-metal mode.
-2. **No Traps / Exceptions / Interrupts:** No hardware exception handling for illegal instructions or external interrupts (`ECALL`, `EBREAK`).
-3. **No Sub-Word Memory Access:** Only 32-bit word access (`lw`, `sw`) is supported; byte/halfword operations (`lb, lbu, lh, lhu, sb, sh`) are not implemented.
-4. **No Shift Operations:** Shifts (`sll, srl, sra, slli, srli, srai`) and XOR operations (`xor, xori`) are not decoded in the ALU.
-5. **No Dynamic Branch Prediction:** The pipeline uses static branch prediction (assumes not taken) and incurs a 2-cycle flush penalty on taken branches.
-6. **No Caches or Memory Hierarchy:** Harvard split memories are modeled as flat arrays initialized via `$readmemh`.
+```bash
+make lint           # Verilator --lint-only -Wall on single-cycle & pipe_datapath
+make test           # Unit tests, pipeline/single-cycle benchmarks, ISS trace-diff & 600 random tests
+make test-pipeline  # Run only 5-stage pipeline hazard & program suites
+make synth          # Generic Yosys synthesis check
+make wave           # Generate VCD waveform dump
+```
 
 ---
 
-## 13. References
+## Limitations & Future Work
 
-1. **Waterman, A., & Asanović, K. (Eds.)**. *The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA*, Version 20191213. RISC-V International.
-2. **Harris, S. L., & Harris, D. M.** (2021). *Digital Design and Computer Architecture: RISC-V Edition*. Morgan Kaufmann.
-3. **Patterson, D. A., & Hennessy, J. L.** (2017). *Computer Organization and Design RISC-V Edition: The Hardware Software Interface*. Morgan Kaufmann.
-4. **IEEE Standard for SystemVerilog** — *IEEE Std 1800-2017 (Unified Hardware Design, Specification, and Verification Language)*.
+- **15-Instruction RV32I Subset:** Implements `lw`, `sw`, `add`, `sub`, `and`, `or`, `slt`, `addi`, `andi`, `ori`, `slti`, `beq`, `bne`, `jal`, `lui`. Shifts (`sll`/`srl`/`sra`), `xor`/`xori`, `sltu`/`sltiu`, remaining branches (`blt`/`bge`/`bltu`/`bgeu`), sub-word loads/stores (`lb`/`lh`/`sb`/`sh`), `auipc`, and `jalr` are not implemented.
+- **No CSRs, Traps, or Interrupts:** Runs in unprivileged bare-metal mode without `Zicsr` registers (`mstatus`, `mepc`, `mtvec`), `ecall`/`ebreak`, or misaligned-access trap handlers (unaligned memory accesses are safely ignored/zeroed).
+- **Static Not-Taken Branch Prediction:** Branches and `jal` resolve in the EX stage, incurring a 2-cycle flush penalty when taken.
+- **Behavioral Memory & Generic Synthesis Scope:** Split Harvard memories (`imem`/`dmem`) are `$readmemh`-initialized arrays without caches or an external AXI/Wishbone bus; during `synth -flatten` in `make synth`, top-level `pipe_datapath` only exposes performance counters (`cycles_count`, `retired_inst_count`), causing Yosys to constant-fold static ROM logic (`202` cells) rather than representing a full physical ASIC/FPGA netlist.
+- **Future Work:** Expand ALU/decoder to all 37 base RV32I instructions (including shifts, sub-word accesses, `auipc`, `jalr`), add early ID-stage branch resolution or a 2-bit BHT/BTB predictor, attach L1 caches over a standard bus, and run FPGA/ASIC physical timing analysis.
 
 ---
 
 <p align="center">
-  <b>RM32 Processor Core</b> • Engineering & Verification by <a href="https://github.com/nikunjmalik306">Nikunj Malik</a>
+  <b>5-Stage Pipelined RISC-V (RV32I) Processor</b> • Engineering & Verification by <a href="https://github.com/nikunjmalik306">Nikunj Malik</a>
 </p>

@@ -1,6 +1,6 @@
-# RM32 5-Stage Pipelined RV32I Processor Core
+# 5-Stage Pipelined RISC-V (RV32I) Processor Core
 
-This directory contains the complete **5-stage pipelined RV32I processor core** (`IF → ID → EX → MEM → WB`) implemented in synthesizable SystemVerilog (`IEEE 1800-2012/2017`). It executes the same 15-instruction RV32I subset as the single-cycle core in [`../rtl/`](../rtl/), reuses its verified submodules (`imem`, `dmem`, `controller`, `reg_file`, `signextn`, `alu`), and adds full hardware hazard detection, forwarding, stalling, branch flushing, and cycle/retired-instruction performance counters.
+This directory contains the evolved **5-stage pipelined RV32I processor core** (`IF → ID → EX → MEM → WB`) implemented in synthesizable SystemVerilog (`IEEE 1800-2012/2017`). Building upon the single-cycle baseline in [`../rtl/`](../rtl/), it reuses the verified combinational and memory building blocks (`imem`, `dmem`, `controller`, `reg_file`, `signextn`, `alu`) and introduces four synchronous inter-stage pipeline registers (`pipe_if_id`, `pipe_id_ex`, `pipe_ex_mem`, `pipe_mem_wb`), full data forwarding, load-use stalling, EX-stage branch flushing, and cycle/retired-instruction performance counters.
 
 > Back to the [root project README](../README.md).
 

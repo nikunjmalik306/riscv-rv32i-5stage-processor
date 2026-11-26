@@ -1,4 +1,4 @@
-name: RM32 RTL Verification & CI
+name: RV32I RTL Verification & CI
 
 on:
   push:

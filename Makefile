@@ -1,5 +1,5 @@
 # ==============================================================================
-# RM32 RISC-V RV32I Processor Core - Verification & Build Automation Makefile
+# 5-Stage Pipelined RISC-V (RV32I) Processor - Verification & Build Makefile
 # ==============================================================================
 
 SHELL := /bin/bash

@@ -1,6 +1,6 @@
-# Changelog — RM32 Processor Core Upgrade
+# Changelog — Evolution from Single-Cycle to 5-Stage Pipelined RV32I Processor
 
-All notable changes made to turn the RM32 repository into a portfolio-grade RISC-V implementation are documented in this file.
+All notable architectural upgrades, verification infrastructure, and RTL bug fixes made while evolving the single-cycle baseline into a verified 5-stage pipelined RISC-V (RV32I) processor are documented below.
 
 ---
 
@@ -53,4 +53,4 @@ All notable changes made to turn the RM32 repository into a portfolio-grade RISC
 ### Documentation
 - **README Rewrite:** Completely updated `README.md` with accurate supported instruction tables, Mermaid block diagrams, real simulation results, and honest limitation disclosures.
 - **Design Decisions Document:** Created `docs/DESIGN_DECISIONS.md` explaining the engineering WHY behind each choice.
-- **Interview Notes:** Created `docs/INTERVIEW_NOTES.md` with 25 technical interview questions and grounded answers.
+- **Architecture Q&A:** Created `docs/ARCHITECTURE_QA.md` with 25 architectural design and verification Q&As grounded in code.

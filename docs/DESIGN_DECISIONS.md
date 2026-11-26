@@ -1,6 +1,6 @@
-# RM32 Design Decisions & Architecture Trade-offs
+# Design Decisions & Single-Cycle to 5-Stage Pipeline Evolution
 
-This document details the architectural and engineering rationale behind every major design decision in the RM32 single-cycle and 5-stage pipelined processor implementations.
+This document details the architectural and engineering rationale behind the design decisions made while building the single-cycle RV32I baseline and evolving it into the 5-stage pipelined processor.
 
 ---
 
@@ -78,7 +78,7 @@ This document details the architectural and engineering rationale behind every m
 - **Decision:** Branch condition evaluated in the EX stage using the ALU comparator, rather than adding an early branch comparator in ID.
 - **Rationale:**
   - Evaluating branches in ID requires an extra dedicated 32-bit adder (for branch target) AND an extra 32-bit equality/comparison unit in the ID stage, plus forwarding paths from EX and MEM directly into ID.
-  - Evaluating branches in EX reuses the existing ALU, eliminates extra comparators, and simplifies the forwarding network, at the cost of 2 penalty cycles on taken branches (flushing IF/ID and ID/EX). For an educational and portfolio design, this is the cleanest, most standard Harris & Harris style microarchitecture.
+  - Evaluating branches in EX reuses the existing ALU, eliminates extra comparators, and simplifies the forwarding network, at the cost of 2 penalty cycles on taken branches (flushing IF/ID and ID/EX). For a clean, modular Harris & Harris style RISC-V pipeline, this provides a clear critical-path and hardware tradeoff.
 
 ---
 

@@ -3,7 +3,7 @@
 // Design Name: Single-Cycle Core Integration Testbench
 // Module Name: single_cycle_TB
 // Description:
-// Self-checking integration testbench for the RM32 single-cycle datapath.
+// Self-checking integration testbench for the single-cycle RV32I baseline datapath.
 // Validates execution of initial load/store verification program.
 //////////////////////////////////////////////////////////////////////////////////
 

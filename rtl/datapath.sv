@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Design Name: RM32 Datapath Top-Level
+// Design Name: Single-Cycle RV32I Datapath Baseline
 // Module Name: datapath
 // Description:
 // Single-cycle RV32I subset processor datapath supporting 15 instructions:
